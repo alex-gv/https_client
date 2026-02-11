@@ -94,7 +94,7 @@ add_subdirectory(example)
 include(InstallRequiredSystemLibraries)
 
 set(CPACK_PACKAGE_NAME "https_client")
-set(CPACK_PACKAGE_VENDOR "Aleksei Gurov")
+set(CPACK_PACKAGE_VENDOR "Alex-gv")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "HTTPS client library")
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 
