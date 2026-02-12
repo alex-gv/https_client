@@ -1,10 +1,10 @@
-name: CMake with vcpkg and cache
+name: Create release
 
 on:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+    tags:
+      - 'v*'
 
 env:
   BUILD_TYPE: Release
@@ -15,9 +15,24 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            artifact_name: https-client-linux
+            cpack_generators: "TGZ"
+            triplet: x64-linux
+          - os: windows-latest
+            artifact_name: https-client-windows
+            cpack_generators: "ZIP"
+            triplet: x64-windows
+          - os: macos-latest
+            artifact_name: https-client-macos
+            cpack_generators: "TGZ"
+            triplet: arm64-osx
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
@@ -39,9 +54,137 @@ jobs:
         fi
 
     - name: Configure CMake
+      shell: bash
       run: |
-        cmake --preset ${{ steps.cmake-preset.outputs.preset }}
+        cmake --preset ${{ steps.cmake-preset.outputs.preset }} \
+          -DCPACK_GENERATOR="${{ matrix.cpack_generators }}" \
+          -DCPACK_PACKAGE_VERSION="${{ github.ref_name }}" \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
 
     - name: Build
       run: |
-        cmake --build --preset ${{ steps.cmake-preset.outputs.preset }}
+        cmake --build --preset ${{ steps.cmake-preset.outputs.preset }} --config ${{ env.BUILD_TYPE }}
+
+    # - name: Run tests
+    #   working-directory: ${{ github.workspace }}/build/${{ steps.cmake-preset.outputs.preset }}
+    #   run: |
+    #     ctest -C ${{ env.BUILD_TYPE }} --output-on-failure
+    #   continue-on-error: false
+
+    - name: Build CPack packages
+      working-directory: ${{ github.workspace }}/build/${{ steps.cmake-preset.outputs.preset }}
+      run: |
+        cpack -C ${{ env.BUILD_TYPE }} -G ${{ matrix.cpack_generators }}
+
+    - name: List generated packages
+      working-directory: ${{ github.workspace }}/build/${{ steps.cmake-preset.outputs.preset }}
+      shell: bash
+      run: |
+        echo "Generated packages:"
+        ls -la *.deb *.tar.gz *.zip *.dmg *.exe 2>/dev/null || true
+        echo "::group::Package files"
+        find . -name "*.deb" -o -name "*.tar.gz" -o -name "*.zip" -o -name "*.dmg" -o -name "*.exe" | while read file; do
+          echo "Found: $file"
+          echo "::set-output name=package_$(basename $file)::$file"
+        done
+        echo "::endgroup::"
+
+    - name: Upload CPack packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.artifact_name }}-packages
+        path: |
+          build/${{ steps.cmake-preset.outputs.preset }}/*.tar.gz
+          build/${{ steps.cmake-preset.outputs.preset }}/*.zip
+        if-no-files-found: warn
+
+    - name: Upload to Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          build/${{ steps.cmake-preset.outputs.preset }}/*.tar.gz
+          build/${{ steps.cmake-preset.outputs.preset }}/*.zip
+        generate_release_notes: true
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  create-release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Display structure of downloaded files
+      run: |
+        ls -R artifacts
+        echo "::group::All packages"
+        find artifacts -type f | while read file; do
+          echo "Package: $file"
+        done
+        echo "::endgroup::"
+
+    - name: Create unified release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: artifacts/**/*
+        generate_release_notes: true
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+  publish-packages:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+    - name: Download Linux packages
+      if: matrix.os == 'ubuntu-latest'
+      uses: actions/download-artifact@v4
+      with:
+        name: https-client-linux-packages
+        path: packages/linux
+
+    - name: Download Windows packages
+      if: matrix.os == 'windows-latest'
+      uses: actions/download-artifact@v4
+      with:
+        name: https-client-windows-packages
+        path: packages/windows
+
+    - name: Download macOS packages
+      if: matrix.os == 'macos-latest'
+      uses: actions/download-artifact@v4
+      with:
+        name: https-client-macos-packages
+        path: packages/macos
+
+    - name: Publish to GitHub Packages
+      run: |
+        echo "Publishing packages to GitHub Packages..."
+
+    - name: Create SHA256 checksums
+      working-directory: packages
+      shell: bash
+      run: |
+        find . -type f -name "*.deb" -o -name "*.tar.gz" -o -name "*.zip" -o -name "*.dmg" -o -name "*.exe" | while read file; do
+          sha256sum "$file" >> checksums.txt
+        done
+        cat checksums.txt
+
+    - name: Upload checksums
+      uses: actions/upload-artifact@v4
+      with:
+        name: package-checksums
+        path: packages/checksums.txt

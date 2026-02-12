@@ -1,0 +1,48 @@
+name: CMake with vcpkg and cache
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgGitCommitId: '66c0373dc7fca549e5803087b9487edfe3aca0a1'
+        vcpkgJsonGlob: '**/vcpkg.json'
+        runVcpkgInstall: true
+
+    - name: Get CMake preset
+      id: cmake-preset
+      shell: bash
+      run: |
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          echo "preset=windows" >> $GITHUB_OUTPUT
+        elif [[ "${{ runner.os }}" == "macOS" ]]; then
+          echo "preset=macos" >> $GITHUB_OUTPUT
+        else
+          echo "preset=linux" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Configure CMake
+      run: |
+        cmake --preset ${{ steps.cmake-preset.outputs.preset }}
+
+    - name: Build
+      run: |
+        cmake --build --preset ${{ steps.cmake-preset.outputs.preset }}
+

@@ -1,3 +1,1 @@
-cmake -S . -B build
-cmake --build build --config Release
-cmake --build build --target package
+[![CMake with vcpkg and cache](https://github.com/alex-gv/https_client/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/alex-gv/https_client/actions/workflows/build.yml)

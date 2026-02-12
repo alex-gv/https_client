@@ -103,12 +103,10 @@ add_subdirectory(example)
 
 include(InstallRequiredSystemLibraries)
 
-set(CPACK_PACKAGE_NAME "https_client")
+set(CPACK_PACKAGE_NAME "https-client")
 set(CPACK_PACKAGE_VENDOR "Alex-gv")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "HTTPS client library")
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
-
-set(CPACK_PACKAGE_CONTACT "www.aleksej@gmail.com")
 
 set(CPACK_PACKAGE_FILE_NAME
     "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${CMAKE_SYSTEM_NAME}"
