@@ -31,7 +31,7 @@ target_link_libraries(https_client_tests
         https_client
 )
 
-enable_testing()
-add_test(NAME https_client_tests COMMAND https_client_tests)
+
+add_test(NAME https_clienttests COMMAND https_client_tests)
 
 gtest_discover_tests(https_client_tests)

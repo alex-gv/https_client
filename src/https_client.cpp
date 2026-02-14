@@ -1,3 +1,9 @@
+/*
+ *  https_client.cpp
+ *
+ *  Copyright (c) 2026 <Aleksei Gurov>
+ *
+ */
 #include "public/https_client.h"
 #include <private/ssl_context_builder.h>
 #include "private/logger.h"

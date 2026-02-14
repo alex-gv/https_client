@@ -1,3 +1,9 @@
+/*
+ *  logger.cpp
+ *
+ *  Copyright (c) 2026 <Aleksei Gurov>
+ *
+ */
 #include "private/logger.h"
 #include <iostream>
 #include <functional>

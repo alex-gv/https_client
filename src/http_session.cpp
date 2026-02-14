@@ -1,3 +1,9 @@
+/*
+ *  http_session.cpp
+ *
+ *  Copyright (c) 2026 <Aleksei Gurov>
+ *
+ */
 #include "private/http_session.h"
 
 #include <boost/beast.hpp>
