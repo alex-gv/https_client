@@ -2,10 +2,14 @@ find_package(GTest REQUIRED)
 include(GoogleTest)
 
 find_package(httplib CONFIG REQUIRED)
+if(APPLE)
+    find_library(COREFOUNDATION_LIBRARY CoreFoundation)
+    find_library(SECURITY_LIBRARY Security)
+endif()
 
 find_library(HTTPS_CLIENT_LIB
     NAMES https_client
-    PATHS J:/github/https_client/build/windows/Release
+    PATHS ${CMAKE_CURRENT_SOURCE_DIR}/build/windows/Release
 )
 
 add_executable(https_client_tests
@@ -28,6 +32,8 @@ target_link_libraries(https_client_tests
         GTest::gtest
         GTest::gtest_main
         httplib::httplib
+        $<$<PLATFORM_ID:Darwin>:${COREFOUNDATION_LIBRARY}>
+        $<$<PLATFORM_ID:Darwin>:${SECURITY_LIBRARY}>
         https_client
 )
 

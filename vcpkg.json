@@ -5,8 +5,7 @@
     "boost-regex",
     "boost-asio",
     "boost-beast",
-    "openssl",
-    "mbedtls"
+    "openssl"
   ],
   "features": {
     "tests": {

@@ -96,21 +96,7 @@ target_link_options(https_client PRIVATE
     $<$<AND:$<PLATFORM_ID:APPLE>,$<CXX_COMPILER_ID:Clang>>:-Wl,-dead_strip>
 )
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Android")
-    set(LIBSSL_FILE "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TRIPLET}/lib/libmbedtls.a")
-    set(LIBCRYPTO_FILE "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TRIPLET}/lib/libmbedcrypto.a")
-    target_link_libraries(https_client
-    PRIVATE
-        Boost::system
-        Boost::regex
-        Boost::beast
-        ${LIBSSL_FILE}
-        ${LIBCRYPTO_FILE}
-        $<$<PLATFORM_ID:Darwin>:${COREFOUNDATION_LIBRARY}>
-        $<$<PLATFORM_ID:Darwin>:${SECURITY_LIBRARY}>
-)
-else()
-    target_link_libraries(https_client
+target_link_libraries(https_client
     PRIVATE
         Boost::system
         Boost::regex
@@ -120,9 +106,6 @@ else()
         $<$<PLATFORM_ID:Darwin>:${COREFOUNDATION_LIBRARY}>
         $<$<PLATFORM_ID:Darwin>:${SECURITY_LIBRARY}>
 )
-endif()
-
-
 
 install(TARGETS https_client
     EXPORT https_clientTargets
