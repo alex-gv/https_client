@@ -37,9 +37,9 @@ jobs:
     - name: Setup vcpkg
       uses: lukka/run-vcpkg@v11
       with:
+        vcpkgDirectory: ${{ github.workspace }}/vcpkg_bin
         vcpkgGitCommitId: '66c0373dc7fca549e5803087b9487edfe3aca0a1'
-        vcpkgJsonGlob: '**/vcpkg.json'
-        runVcpkgInstall: true
+        runVcpkgInstall: false
 
     - name: Get CMake preset
       id: cmake-preset
