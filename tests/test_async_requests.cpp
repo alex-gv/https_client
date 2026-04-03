@@ -12,10 +12,12 @@ TEST(HttpsClientAsync, GetCallback) {
     RequestConfig cfg;
     cfg.url = "http://localhost:8081/ok";
 
+    ExternalRequestConfig extCfg(cfg, Method::GET);
+
     std::promise<Response> promise;
     auto future = promise.get_future();
 
-    client.getAsync(cfg, [&](Response r) {
+    client.getAsync(extCfg, [&](Response r) {
         promise.set_value(r);
     });
 
@@ -31,7 +33,9 @@ TEST(HttpsClientAsync, GetFuture) {
     RequestConfig cfg;
     cfg.url = "http://localhost:8081/ok";
 
-    auto future = client.getAsync(cfg);
+    ExternalRequestConfig extCfg(cfg, Method::GET);
+
+    auto future = client.getAsync(extCfg);
     Response res = future.get();
 
     EXPECT_EQ(res.status, 200);

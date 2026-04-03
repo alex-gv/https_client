@@ -35,7 +35,7 @@ struct HTTPS_CLIENT_API Response {
     std::string version;
     std::string reason;
     std::string url;
-    bool success{true};
+    bool success{false};
     std::string errorMessage;
 
     bool isOk() const {
@@ -63,12 +63,27 @@ struct HTTPS_CLIENT_API RequestConfig {
     int connectTimeoutSeconds{3};
     bool followRedirects{true};
     int maxRedirects{5};
-    bool verifySsl = true;
+    bool verifySsl{true};
     std::string sslCertificateFile;
     std::vector<std::string> sslCiphers;
 
     RequestConfig(const std::string& url) : url(url) {}
     RequestConfig() = default;
+};
+
+struct HTTPS_CLIENT_API ProxyConfig {
+    std::string host;
+    std::string port;
+    std::string username;
+    std::string password;
+    bool useHttps{false};  // If true, use TLS connection for proxy. Don't check certificates
+
+    ProxyConfig() = default;
+    ProxyConfig(const std::string& host, const std::string& port,
+                const std::string& username = "", const std::string& password = "", bool useHttps = false)
+        : host(host), port(port), username(username), password(password), useHttps(useHttps) {}
+
+    bool isEnabled() const { return !host.empty() && !port.empty(); }
 };
 
 struct HTTPS_CLIENT_API ExternalRequestConfig : public RequestConfig {
@@ -93,6 +108,7 @@ struct HTTPS_CLIENT_API ExternalRequestConfig : public RequestConfig {
     ExternalRequestConfig(const std::string& url, Method method) : RequestConfig(url), method(method) {}
 
     Method method{Method::GET};
+    ProxyConfig proxy;
 };
 
 using ResponseCallback = std::function<void(const Response&)>;

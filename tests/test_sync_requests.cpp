@@ -11,7 +11,8 @@ TEST(HttpsClientSync, GetSuccess) {
     RequestConfig cfg;
     cfg.url = "http://localhost:8081/ok";
 
-    Response res = client.get(cfg);
+    ExternalRequestConfig extCfg(cfg, Method::GET);
+    Response res = client.get(extCfg);
 
     EXPECT_EQ(res.status, 200);
     EXPECT_EQ(res.body, "OK");
@@ -25,7 +26,8 @@ TEST(HttpsClientSync, PostEcho) {
     cfg.url = "http://localhost:8081/echo";
     cfg.body = "hello";
 
-    Response res = client.post(cfg);
+    ExternalRequestConfig extCfg(cfg, Method::POST);
+    Response res = client.post(extCfg);
 
     EXPECT_EQ(res.status, 200);
     EXPECT_EQ(res.body, "hello");

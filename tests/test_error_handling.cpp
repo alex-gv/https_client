@@ -10,7 +10,8 @@ TEST(HttpsClientErrors, InvalidUrl) {
     RequestConfig cfg;
     cfg.url = "http://invalid-host";
 
-    Response res = client.get(cfg);
+    ExternalRequestConfig extCfg(cfg, Method::GET);
+    Response res = client.get(extCfg);
 
     EXPECT_NE(res.status, 200);
     EXPECT_FALSE(res.errorMessage.empty());
@@ -26,7 +27,8 @@ TEST(HttpsClientLogging, CallbackCalled) {
 
     RequestConfig cfg;
     cfg.url = "http://invalid-host";
-    client.get(cfg);
+    ExternalRequestConfig extCfg(cfg, Method::GET);
+    client.get(extCfg);
 
     EXPECT_TRUE(called);
 }
