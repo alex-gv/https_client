@@ -35,7 +35,7 @@ struct HTTPS_CLIENT_API Response {
     std::string version;
     std::string reason;
     std::string url;
-    bool success{true};
+    bool success{false};
     std::string errorMessage;
 
     bool isOk() const {
@@ -63,7 +63,7 @@ struct HTTPS_CLIENT_API RequestConfig {
     int connectTimeoutSeconds{3};
     bool followRedirects{true};
     int maxRedirects{5};
-    bool verifySsl = true;
+    bool verifySsl{true};
     std::string sslCertificateFile;
     std::vector<std::string> sslCiphers;
 
@@ -76,7 +76,7 @@ struct HTTPS_CLIENT_API ProxyConfig {
     std::string port;
     std::string username;
     std::string password;
-    bool useHttps{false};  // Если true, использовать TLS для подключения к прокси
+    bool useHttps{false};  // If true, use TLS connection for proxy. Don't check certificates
 
     ProxyConfig() = default;
     ProxyConfig(const std::string& host, const std::string& port,

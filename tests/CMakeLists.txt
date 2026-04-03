@@ -7,11 +7,6 @@ if(APPLE)
     find_library(SECURITY_LIBRARY Security)
 endif()
 
-find_library(HTTPS_CLIENT_LIB
-    NAMES https_client
-    PATHS ${CMAKE_CURRENT_SOURCE_DIR}/build/windows/Release
-)
-
 add_executable(https_client_tests
     test_sync_requests.cpp
     test_async_requests.cpp
@@ -39,6 +34,6 @@ target_link_libraries(https_client_tests
 )
 
 
-add_test(NAME https_clienttests COMMAND https_client_tests)
+#add_test(NAME https_clienttests COMMAND https_client_tests)
 
 gtest_discover_tests(https_client_tests)
