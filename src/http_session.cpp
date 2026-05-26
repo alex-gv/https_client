@@ -15,6 +15,22 @@
 #include <chrono>
 #include <sstream>
 #include <stdexcept>
+#include <algorithm>
+#include <cctype>
+
+#ifdef _WIN32
+#ifndef SECURITY_WIN32
+#define SECURITY_WIN32
+#endif
+#include <windows.h>
+#include <security.h>
+#elif defined(HTTPS_CLIENT_HAS_GSSAPI)
+#ifdef __APPLE__
+#include <GSS/GSS.h>
+#else
+#include <gssapi/gssapi.h>
+#endif
+#endif
 
 namespace beast = boost::beast;
 namespace http = beast::http;
@@ -56,6 +72,57 @@ std::string base64Encode(const std::string& input) {
     return result;
 }
 
+std::string base64Decode(const std::string& input) {
+    static const std::string base64Chars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz"
+        "0123456789+/";
+
+    std::string result;
+    int val = 0;
+    int valb = -8;
+
+    for (unsigned char c : input) {
+        if (std::isspace(c)) {
+            continue;
+        }
+        if (c == '=') {
+            break;
+        }
+
+        auto index = base64Chars.find(static_cast<char>(c));
+        if (index == std::string::npos) {
+            break;
+        }
+
+        val = (val << 6) + static_cast<int>(index);
+        valb += 6;
+        if (valb >= 0) {
+            result.push_back(static_cast<char>((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+
+    return result;
+}
+
+std::string trim(std::string value) {
+    auto notSpace = [](unsigned char ch) { return !std::isspace(ch); };
+    value.erase(value.begin(), std::find_if(value.begin(), value.end(), notSpace));
+    value.erase(std::find_if(value.rbegin(), value.rend(), notSpace).base(), value.end());
+    return value;
+}
+
+bool startsWithNoCase(const std::string& value, const std::string& prefix) {
+    if (value.size() < prefix.size()) {
+        return false;
+    }
+
+    return std::equal(prefix.begin(), prefix.end(), value.begin(), [](char a, char b) {
+        return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+    });
+}
+
 std::string urlEncode(const std::string& value) {
     std::ostringstream escaped;
     escaped.fill('0');
@@ -85,6 +152,241 @@ std::string buildQueryString(const std::unordered_map<std::string, std::string>&
     return query;
 }
 }  // namespace
+
+struct HttpSession::PlatformProxyAuthContext {
+#ifdef _WIN32
+    CredHandle credentials{};
+    CtxtHandle context{};
+    TimeStamp expiry{};
+    bool hasCredentials{false};
+    bool hasContext{false};
+    std::string username;
+    std::string domain;
+    std::string password;
+    SEC_WINNT_AUTH_IDENTITY_A identity{};
+
+    ~PlatformProxyAuthContext() {
+        if (hasContext) {
+            DeleteSecurityContext(&context);
+        }
+        if (hasCredentials) {
+            FreeCredentialsHandle(&credentials);
+        }
+    }
+
+    void acquire(const std::string& packageName, const std::string& rawUsername, const std::string& rawPassword) {
+        void* authData = nullptr;
+
+        if (!rawUsername.empty()) {
+            auto slash = rawUsername.find('\\');
+            auto at = rawUsername.find('@');
+            if (slash != std::string::npos) {
+                domain = rawUsername.substr(0, slash);
+                username = rawUsername.substr(slash + 1);
+            } else if (packageName != "Kerberos" && at != std::string::npos) {
+                username = rawUsername.substr(0, at);
+                domain = rawUsername.substr(at + 1);
+            } else {
+                username = rawUsername;
+            }
+            password = rawPassword;
+
+            identity.User = reinterpret_cast<unsigned char*>(username.data());
+            identity.UserLength = static_cast<unsigned long>(username.size());
+            identity.Domain = domain.empty() ? nullptr : reinterpret_cast<unsigned char*>(domain.data());
+            identity.DomainLength = static_cast<unsigned long>(domain.size());
+            identity.Password = reinterpret_cast<unsigned char*>(password.data());
+            identity.PasswordLength = static_cast<unsigned long>(password.size());
+            identity.Flags = SEC_WINNT_AUTH_IDENTITY_ANSI;
+            authData = &identity;
+        }
+
+        auto status = AcquireCredentialsHandleA(nullptr, const_cast<SEC_CHAR*>(packageName.c_str()), SECPKG_CRED_OUTBOUND,
+                                                nullptr, authData, nullptr, nullptr, &credentials, &expiry);
+        if (status != SEC_E_OK) {
+            throw std::runtime_error("AcquireCredentialsHandle(" + packageName + ") failed: 0x" + statusToHex(status));
+        }
+
+        hasCredentials = true;
+    }
+
+    std::string createToken(const std::string& packageName, const std::string& proxyHost, const std::string& challenge) {
+        if (!hasCredentials) {
+            throw std::runtime_error(packageName + " credentials were not acquired");
+        }
+
+        SecBuffer outBuffer{};
+        outBuffer.BufferType = SECBUFFER_TOKEN;
+
+        SecBufferDesc outDesc{};
+        outDesc.ulVersion = SECBUFFER_VERSION;
+        outDesc.cBuffers = 1;
+        outDesc.pBuffers = &outBuffer;
+
+        SecBuffer inBuffer{};
+        SecBufferDesc inDesc{};
+        SecBufferDesc* inDescPtr = nullptr;
+        if (!challenge.empty()) {
+            inBuffer.BufferType = SECBUFFER_TOKEN;
+            inBuffer.cbBuffer = static_cast<unsigned long>(challenge.size());
+            inBuffer.pvBuffer = const_cast<char*>(challenge.data());
+            inDesc.ulVersion = SECBUFFER_VERSION;
+            inDesc.cBuffers = 1;
+            inDesc.pBuffers = &inBuffer;
+            inDescPtr = &inDesc;
+        }
+
+        unsigned long attrs = 0;
+        const auto flags = ISC_REQ_CONNECTION | ISC_REQ_ALLOCATE_MEMORY;
+        std::string target = "HTTP/" + proxyHost;
+        auto status = InitializeSecurityContextA(&credentials, hasContext ? &context : nullptr, target.data(), flags, 0,
+                                                 SECURITY_NATIVE_DREP, inDescPtr, 0, &context, &outDesc, &attrs, &expiry);
+
+        if (status != SEC_E_OK && status != SEC_I_CONTINUE_NEEDED) {
+            throw std::runtime_error("InitializeSecurityContext(" + packageName + ") failed: 0x" + statusToHex(status));
+        }
+
+        hasContext = true;
+
+        std::string token;
+        if (outBuffer.pvBuffer && outBuffer.cbBuffer > 0) {
+            token.assign(static_cast<const char*>(outBuffer.pvBuffer), outBuffer.cbBuffer);
+            FreeContextBuffer(outBuffer.pvBuffer);
+        }
+
+        return token;
+    }
+
+private:
+    static std::string statusToHex(unsigned long status) {
+        std::ostringstream stream;
+        stream << std::hex << std::uppercase << status;
+        return stream.str();
+    }
+#else
+#ifdef HTTPS_CLIENT_HAS_GSSAPI
+    gss_ctx_id_t context{GSS_C_NO_CONTEXT};
+    gss_name_t targetName{GSS_C_NO_NAME};
+
+    ~PlatformProxyAuthContext() {
+        OM_uint32 minor = 0;
+        if (context != GSS_C_NO_CONTEXT) {
+            gss_delete_sec_context(&minor, &context, GSS_C_NO_BUFFER);
+        }
+        if (targetName != GSS_C_NO_NAME) {
+            gss_release_name(&minor, &targetName);
+        }
+    }
+
+    void acquire(const std::string& packageName, const std::string& rawUsername, const std::string& rawPassword) {
+        if (packageName != "Kerberos") {
+            throw std::runtime_error(packageName + " proxy authentication is only supported on Windows");
+        }
+        if (!rawUsername.empty() || !rawPassword.empty()) {
+            throw std::runtime_error(
+                "Kerberos proxy authentication on GSSAPI platforms uses the current credential cache; "
+                "explicit username/password is not supported");
+        }
+    }
+
+    std::string createToken(const std::string& packageName, const std::string& proxyHost, const std::string& challenge) {
+        if (packageName != "Kerberos") {
+            throw std::runtime_error(packageName + " proxy authentication is only supported on Windows");
+        }
+
+        ensureTargetName(proxyHost);
+
+        gss_buffer_desc inputToken{0, nullptr};
+        gss_buffer_t inputTokenPtr = GSS_C_NO_BUFFER;
+        if (!challenge.empty()) {
+            inputToken.length = challenge.size();
+            inputToken.value = const_cast<char*>(challenge.data());
+            inputTokenPtr = &inputToken;
+        }
+
+        gss_buffer_desc outputToken{0, nullptr};
+        OM_uint32 minor = 0;
+        OM_uint32 flags = GSS_C_MUTUAL_FLAG | GSS_C_REPLAY_FLAG;
+        OM_uint32 actualFlags = 0;
+        OM_uint32 status = gss_init_sec_context(&minor, GSS_C_NO_CREDENTIAL, &context, targetName, GSS_C_NO_OID, flags, 0,
+                                                GSS_C_NO_CHANNEL_BINDINGS, inputTokenPtr, nullptr, &outputToken,
+                                                &actualFlags, nullptr);
+
+        if (status != GSS_S_COMPLETE && status != GSS_S_CONTINUE_NEEDED) {
+            throw std::runtime_error("gss_init_sec_context(Kerberos) failed: " + gssErrorToString(status, minor));
+        }
+
+        std::string token;
+        if (outputToken.value && outputToken.length > 0) {
+            token.assign(static_cast<const char*>(outputToken.value), outputToken.length);
+            gss_release_buffer(&minor, &outputToken);
+        }
+
+        return token;
+    }
+
+private:
+    void ensureTargetName(const std::string& proxyHost) {
+        if (targetName != GSS_C_NO_NAME) {
+            return;
+        }
+
+        std::string serviceName = "HTTP@" + proxyHost;
+        gss_buffer_desc nameBuffer{};
+        nameBuffer.value = serviceName.data();
+        nameBuffer.length = serviceName.size();
+
+        OM_uint32 minor = 0;
+        OM_uint32 status = gss_import_name(&minor, &nameBuffer, GSS_C_NT_HOSTBASED_SERVICE, &targetName);
+        if (status != GSS_S_COMPLETE) {
+            throw std::runtime_error("gss_import_name(HTTP service) failed: " + gssErrorToString(status, minor));
+        }
+    }
+
+    static std::string displayStatus(OM_uint32 code, int type) {
+        std::string result;
+        OM_uint32 minor = 0;
+        OM_uint32 context = 0;
+
+        do {
+            gss_buffer_desc message{0, nullptr};
+            OM_uint32 status = gss_display_status(&minor, code, type, GSS_C_NO_OID, &context, &message);
+            if (status != GSS_S_COMPLETE) {
+                break;
+            }
+
+            if (!result.empty()) {
+                result += "; ";
+            }
+            result.append(static_cast<const char*>(message.value), message.length);
+            gss_release_buffer(&minor, &message);
+        } while (context != 0);
+
+        return result;
+    }
+
+    static std::string gssErrorToString(OM_uint32 major, OM_uint32 minor) {
+        std::string result = displayStatus(major, GSS_C_GSS_CODE);
+        std::string minorMessage = displayStatus(minor, GSS_C_MECH_CODE);
+        if (!minorMessage.empty()) {
+            if (!result.empty()) {
+                result += " / ";
+            }
+            result += minorMessage;
+        }
+        return result.empty() ? "unknown GSSAPI error" : result;
+    }
+#else
+    void acquire(const std::string& packageName, const std::string&, const std::string&) {
+        throw std::runtime_error(packageName + " proxy authentication is not available on this platform");
+    }
+
+    std::string createToken(const std::string& packageName, const std::string&, const std::string&) {
+        throw std::runtime_error(packageName + " proxy authentication is not available on this platform");
+    }
+#endif
+#endif
+};
 
 static http::verb methodToBoostVerb(Method method) {
     switch (method) {
@@ -122,6 +424,8 @@ HttpSession::HttpSession(net::io_context& ioc, std::shared_ptr<ssl::context> ssl
         config_.userAgent = "AG Client " + std::string(BOOST_BEAST_VERSION_STRING);
     }
 }
+
+HttpSession::~HttpSession() = default;
 
 void HttpSession::run() {
     try {
@@ -303,11 +607,12 @@ void HttpSession::onProxyConnect(beast::error_code ec, tcp::resolver::results_ty
 
     if (config_.proxy.useHttps) {
         logger_.info("Starting SSL handshake with HTTPS proxy");
-        auto proxySslCtx = std::make_unique<ssl::context>(ssl::context::tls_client);
-        proxySslCtx->set_default_verify_paths();
-        proxySslCtx->set_verify_mode(ssl::verify_none);
+        proxySslCtx_ = std::make_unique<ssl::context>(ssl::context::tls_client);
+        proxySslCtx_->set_default_verify_paths();
+        proxySslCtx_->set_verify_mode(ssl::verify_none);
 
-        proxySslStream_ = std::make_unique<beast::ssl_stream<beast::tcp_stream>>(net::make_strand(ioc_), *proxySslCtx);
+        proxySslStream_ =
+            std::make_unique<beast::ssl_stream<beast::tcp_stream>>(std::move(*tcpStream_), *proxySslCtx_);
         stream_ = &proxySslStream_->next_layer();
 
         proxySslStream_->async_handshake(ssl::stream_base::client,
@@ -354,6 +659,7 @@ void HttpSession::onResolveTarget(tcp::resolver::results_type results) {
 }
 
 void HttpSession::sendProxyConnectRequest() {
+    proxyConnectRequest_ = {};
     proxyConnectRequest_.version(11);
     proxyConnectRequest_.method(http::verb::connect);
 
@@ -362,12 +668,21 @@ void HttpSession::sendProxyConnectRequest() {
 
     proxyConnectRequest_.set(http::field::host, target);
     proxyConnectRequest_.set(http::field::user_agent, config_.userAgent);
-    proxyConnectRequest_.set(http::field::proxy_connection, "close");
+    proxyConnectRequest_.set(http::field::proxy_connection, isProxyPlatformAuth() ? "keep-alive" : "close");
 
-    if (!config_.proxy.username.empty() && !config_.proxy.password.empty()) {
+    if (isProxyPlatformAuth()) {
+        try {
+            std::string authHeader = buildProxyPlatformAuthHeader();
+            proxyConnectRequest_.set(http::field::proxy_authorization, authHeader);
+            logger_.debug("Proxy platform authentication header added");
+        } catch (const std::exception& e) {
+            finishWithError(e.what());
+            return;
+        }
+    } else if (!config_.proxy.username.empty() && !config_.proxy.password.empty()) {
         std::string authHeader = buildProxyAuthorizationHeader(config_.proxy.username, config_.proxy.password);
         proxyConnectRequest_.set(http::field::proxy_authorization, authHeader);
-        logger_.debug("Proxy-Authorization header added");
+        logger_.debug("Basic Proxy-Authorization header added");
     }
 
     logger_.info("Sending CONNECT request to proxy for " + target);
@@ -411,6 +726,20 @@ void HttpSession::onProxyConnectRead(beast::error_code ec, std::size_t /*bytesRe
     auto status = proxyConnectResponse_.result_int();
     logger_.info("Proxy CONNECT response status: " + std::to_string(status));
 
+    if (status == 407 && isProxyPlatformAuth() && proxyAuthStep_ > 0 && proxyAuthStep_ < 3) {
+        const std::string scheme = config_.proxy.authType == ProxyAuthType::Kerberos ? "Negotiate" : "NTLM";
+        proxyAuthChallenge_ = extractProxyAuthChallenge(scheme);
+        if (proxyAuthChallenge_.empty()) {
+            finishWithError("Proxy requested Windows authentication but did not send a challenge token");
+            return;
+        }
+
+        logger_.debug("Proxy authentication challenge received, sending authentication response");
+        proxyConnectResponse_ = {};
+        sendProxyConnectRequest();
+        return;
+    }
+
     if (status != 200) {
         std::string reason = std::string(proxyConnectResponse_.reason());
         logger_.error("Proxy CONNECT failed with status " + std::to_string(status) + ": " + reason);
@@ -421,12 +750,23 @@ void HttpSession::onProxyConnectRead(beast::error_code ec, std::size_t /*bytesRe
     logger_.info("Proxy tunnel established successfully");
 
     if (isHttps_) {
-        auto* sslPtr = proxySslStream_->native_handle();
-        SSL_set_tlsext_host_name(sslPtr, urlParts_.host.c_str());
-        stream_ = &proxySslStream_->next_layer();
+        if (proxySslStream_) {
+            auto* sslPtr = proxySslStream_->native_handle();
+            SSL_set_tlsext_host_name(sslPtr, urlParts_.host.c_str());
+            stream_ = &proxySslStream_->next_layer();
+            sslStream_ = std::move(proxySslStream_);
+        } else {
+            sslStream_ = std::make_unique<beast::ssl_stream<beast::tcp_stream>>(std::move(*tcpStream_), *sslCtx_);
+            stream_ = &sslStream_->next_layer();
+            if (!SSL_set_tlsext_host_name(sslStream_->native_handle(), urlParts_.host.c_str())) {
+                beast::error_code sslEc =
+                    beast::error_code(static_cast<int>(::ERR_get_error()), net::error::get_ssl_category());
+                finishWithError("SSL SNI failed: " + sslEc.message());
+                return;
+            }
+        }
         stream_->expires_after(std::chrono::seconds(config_.timeoutSeconds));
         logger_.debug("Starting SSL handshake with target server through proxy tunnel");
-        sslStream_ = std::move(proxySslStream_);
         sslStream_->async_handshake(ssl::stream_base::client,
                                     beast::bind_front_handler(&HttpSession::onHandshake, shared_from_this()));
     } else {
@@ -438,6 +778,54 @@ void HttpSession::onProxyConnectRead(beast::error_code ec, std::size_t /*bytesRe
 std::string HttpSession::buildProxyAuthorizationHeader(const std::string& username, const std::string& password) {
     std::string credentials = username + ":" + password;
     return "Basic " + base64Encode(credentials);
+}
+
+bool HttpSession::isProxyPlatformAuth() const {
+    return config_.proxy.authType == ProxyAuthType::NTLM || config_.proxy.authType == ProxyAuthType::Kerberos;
+}
+
+std::string HttpSession::buildProxyPlatformAuthHeader() {
+    const bool useKerberos = config_.proxy.authType == ProxyAuthType::Kerberos;
+    const std::string packageName = useKerberos ? "Kerberos" : "NTLM";
+    const std::string headerScheme = useKerberos ? "Negotiate" : "NTLM";
+
+    if (!platformProxyAuth_) {
+        platformProxyAuth_ = std::make_unique<PlatformProxyAuthContext>();
+        platformProxyAuth_->acquire(packageName, config_.proxy.username, config_.proxy.password);
+    }
+
+    std::string challenge;
+    if (proxyAuthStep_ > 0 && !proxyAuthChallenge_.empty()) {
+        challenge = base64Decode(proxyAuthChallenge_);
+    }
+
+    auto token = platformProxyAuth_->createToken(packageName, config_.proxy.host, challenge);
+    if (token.empty()) {
+        throw std::runtime_error(packageName + " proxy authentication produced an empty token");
+    }
+
+    ++proxyAuthStep_;
+    return headerScheme + " " + base64Encode(token);
+}
+
+std::string HttpSession::extractProxyAuthChallenge(const std::string& scheme) const {
+    for (const auto& field : proxyConnectResponse_) {
+        if (field.name() != http::field::proxy_authenticate) {
+            continue;
+        }
+
+        std::string value = trim(std::string(field.value()));
+        if (!startsWithNoCase(value, scheme)) {
+            continue;
+        }
+
+        value = trim(value.substr(scheme.size()));
+        if (!value.empty()) {
+            return value;
+        }
+    }
+
+    return "";
 }
 
 void HttpSession::onConnect(beast::error_code ec, tcp::resolver::results_type::endpoint_type endpoint) {
@@ -508,6 +896,9 @@ void HttpSession::sendRequest() {
     stream_->expires_after(std::chrono::seconds(config_.timeoutSeconds));
     if (isHttps_) {
         http::async_write(*sslStream_, request_, beast::bind_front_handler(&HttpSession::onWrite, shared_from_this()));
+    } else if (proxySslStream_) {
+        http::async_write(*proxySslStream_, request_,
+                          beast::bind_front_handler(&HttpSession::onWrite, shared_from_this()));
     } else {
         http::async_write(*tcpStream_, request_, beast::bind_front_handler(&HttpSession::onWrite, shared_from_this()));
     }
@@ -525,6 +916,9 @@ void HttpSession::onWrite(beast::error_code ec, std::size_t bytesWritten) {
     stream_->expires_after(std::chrono::seconds(config_.timeoutSeconds));
     if (isHttps_) {
         http::async_read(*sslStream_, buffer_, httpResponse_,
+                         beast::bind_front_handler(&HttpSession::onRead, shared_from_this()));
+    } else if (proxySslStream_) {
+        http::async_read(*proxySslStream_, buffer_, httpResponse_,
                          beast::bind_front_handler(&HttpSession::onRead, shared_from_this()));
     } else {
         http::async_read(*tcpStream_, buffer_, httpResponse_,
@@ -603,6 +997,13 @@ void HttpSession::closeConnection() {
         sslStream_->async_shutdown([self = shared_from_this()](beast::error_code shutdownEc) {
             if (shutdownEc) {
                 self->logger_.warning("SSL shutdown error: " + shutdownEc.message());
+            }
+        });
+    } else if (proxySslStream_) {
+        logger_.debug("Closing proxy SSL connection");
+        proxySslStream_->async_shutdown([self = shared_from_this()](beast::error_code shutdownEc) {
+            if (shutdownEc) {
+                self->logger_.warning("Proxy SSL shutdown error: " + shutdownEc.message());
             }
         });
     } else {

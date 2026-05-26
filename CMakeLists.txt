@@ -78,6 +78,17 @@ if(APPLE)
     endif()
     find_library(COREFOUNDATION_LIBRARY CoreFoundation)
     find_library(SECURITY_LIBRARY Security)
+    find_library(GSSAPI_LIBRARY GSS)
+elseif(UNIX AND NOT ANDROID)
+    find_path(GSSAPI_INCLUDE_DIR gssapi/gssapi.h)
+    find_library(GSSAPI_LIBRARY NAMES gssapi_krb5 gssapi)
+endif()
+
+if(GSSAPI_LIBRARY)
+    target_compile_definitions(https_client PRIVATE HTTPS_CLIENT_HAS_GSSAPI)
+    if(GSSAPI_INCLUDE_DIR)
+        target_include_directories(https_client PRIVATE ${GSSAPI_INCLUDE_DIR})
+    endif()
 endif()
 
 if(WIN32)
@@ -106,6 +117,8 @@ target_link_libraries(https_client
         Boost::beast
         OpenSSL::SSL
         OpenSSL::Crypto
+        $<$<PLATFORM_ID:Windows>:Secur32>
+        $<$<BOOL:${GSSAPI_LIBRARY}>:${GSSAPI_LIBRARY}>
         $<$<PLATFORM_ID:Darwin>:${COREFOUNDATION_LIBRARY}>
         $<$<PLATFORM_ID:Darwin>:${SECURITY_LIBRARY}>
 )

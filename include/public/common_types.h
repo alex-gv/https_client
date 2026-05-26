@@ -51,6 +51,8 @@ struct HTTPS_CLIENT_API Response {
 
 enum class HTTPS_CLIENT_API Method { GET, POST, PUT, DELETE_, PATCH, HEAD, OPTIONS };
 
+enum class HTTPS_CLIENT_API ProxyAuthType { Basic, NTLM, Kerberos };
+
 struct HTTPS_CLIENT_API RequestConfig {
     std::string url;
     std::any body;
@@ -77,12 +79,14 @@ struct HTTPS_CLIENT_API ProxyConfig {
     std::string port;
     std::string username;
     std::string password;
+    ProxyAuthType authType{ProxyAuthType::Basic};
     bool useHttps{false};  // If true, use TLS connection for proxy. Don't check certificates
 
     ProxyConfig() = default;
     ProxyConfig(const std::string& host, const std::string& port,
-                const std::string& username = "", const std::string& password = "", bool useHttps = false)
-        : host(host), port(port), username(username), password(password), useHttps(useHttps) {}
+                const std::string& username = "", const std::string& password = "", bool useHttps = false,
+                ProxyAuthType authType = ProxyAuthType::Basic)
+        : host(host), port(port), username(username), password(password), authType(authType), useHttps(useHttps) {}
 
     bool isEnabled() const { return !host.empty() && !port.empty(); }
 };

@@ -37,6 +37,7 @@ public:
                 const ExternalRequestConfig& config,
                 ResponseCallback callback,
                 Logger& logger);
+    ~HttpSession();
 
     void run();
 
@@ -76,8 +77,13 @@ private:
     void onProxyConnectWrite(boost::beast::error_code ec, std::size_t bytesWritten);
     void onProxyConnectRead(boost::beast::error_code ec, std::size_t bytesRead);
     std::string buildProxyAuthorizationHeader(const std::string& username, const std::string& password);
+    std::string buildProxyPlatformAuthHeader();
+    std::string extractProxyAuthChallenge(const std::string& scheme) const;
+    bool isProxyPlatformAuth() const;
 
 private:
+    struct PlatformProxyAuthContext;
+
     boost::asio::io_context& ioc_;
     std::shared_ptr<boost::asio::ssl::context> sslCtx_;
     ExternalRequestConfig config_;
@@ -93,6 +99,8 @@ private:
     boost::beast::tcp_stream* stream_{nullptr};
 
     std::unique_ptr<boost::beast::ssl_stream<boost::beast::tcp_stream>> proxySslStream_;
+    std::unique_ptr<boost::asio::ssl::context> proxySslCtx_;
+    std::unique_ptr<PlatformProxyAuthContext> platformProxyAuth_;
 
     bool isHttps_{false};
     UrlParts urlParts_;
@@ -105,6 +113,8 @@ private:
     boost::beast::http::response<boost::beast::http::dynamic_body> proxyConnectResponse_;
 
     boost::asio::ip::tcp::resolver::results_type proxyTargetResults_;
+    std::string proxyAuthChallenge_;
+    int proxyAuthStep_{0};
 
     std::atomic<bool> finished_{false};
 };
