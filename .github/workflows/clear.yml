@@ -1,4 +1,0 @@
-- name: Clone vcpkg manually
-  shell: bash
-  run: |
-    rm -rf ${{ github.workspace }}/vcpkg_bin
