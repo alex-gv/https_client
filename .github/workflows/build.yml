@@ -35,10 +35,10 @@ jobs:
         fetch-depth: 0
 
     - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11
+      uses: lukka/run-vcpkg@v11ю6
       with:
         vcpkgDirectory: ${{ github.workspace }}/vcpkg_bin
-        vcpkgGitCommit: 'master'
+        vcpkgGitCommitId: 'v11.6'
         runVcpkgInstall: false
 
     - name: Get CMake preset
