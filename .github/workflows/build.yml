@@ -38,7 +38,7 @@ jobs:
       uses: lukka/run-vcpkg@v11
       with:
         vcpkgDirectory: ${{ github.workspace }}/vcpkg_bin
-        vcpkgGitCommitId: '2025.04.10'
+        vcpkgGitCommitId: 'e75c3116c6da2e8f18f494fb3b2b795b60be4e65'
         runVcpkgInstall: false
 
     - name: Get CMake preset
